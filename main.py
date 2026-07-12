@@ -2,919 +2,1363 @@
 # -*- coding: utf-8 -*-
 """
 行业合规工具 - compliance-checker
-提供10个合规相关工具：合同分析、法规检索、风险评估、合规清单、隐私审计、
-敏感信息脱敏、法律术语解释、条款生成、义务追踪、报告生成。
+提供10个高级合规算法工具：合同智能分析、法规检索引擎(倒排索引+TF-IDF)、
+风险评估模型(多因子加权+非线性变换)、合规清单生成、隐私影响评估(PIA)、
+数据脱敏器(K-匿名/L-多样性/T-接近性)、法规术语解释器、合规条款生成器、
+合规义务追踪器、合规报告生成器。
 
-无外部依赖，仅使用Python标准库。
+全部使用Python标准库实现，无外部依赖。
 """
 
-import re
 import json
+import math
+import re
+from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 
 
 # ---------------------------------------------------------------------------
-# 1. 合同条款分析
+# 1. 合同智能分析
 # ---------------------------------------------------------------------------
-def contract_analyzer(contract_text, check_items=None):
+def contract_analyzer(contract_text):
     """
-    合同条款分析：检查合同文本中的关键条款和潜在风险。
+    合同智能分析：解析合同结构并提取关键要素。
+
+    算法原理:
+        - 结构解析: 正则识别标题(第X章/条)、附件(附件X)、编号
+        - 要素提取: 规则引擎+正则匹配当事人/金额/期限/违约责任/争议解决
+        - 条件判断树: 多层规则验证要素完整性
 
     参数:
-        contract_text (str): 合同全文文本。
-        check_items (list[str]): 需要检查的条款类型列表，如
-            ["付款条件", "违约责任", "保密条款", "终止条款"]，为None时使用默认项。
+        contract_text (str): 合同文本
 
     返回:
-        dict: 分析报告，包含发现的条款、风险点和建议。
+        dict: 合同分析结果，含structure、key_elements、risk_points、completeness。
     """
-    if check_items is None:
-        check_items = ["付款条件", "违约责任", "保密条款", "终止条款", "适用法律", "争议解决"]
+    # 步骤1: 结构解析
+    chapters = re.findall(r'第[一二三四五六七八九十百\d]+章\s*[^\n]+', contract_text)
+    articles = re.findall(r'第[一二三四五六七八九十百\d]+条\s*[^\n]+', contract_text)
+    attachments = re.findall(r'附件[一二三四五六七八九十\d]+[：:][^\n]*', contract_text)
 
-    # 关键条款模式
-    clause_patterns = {
-        "付款条件": [r'付款\s*方式[:：]?(.+)', r'支付\s*期限[:：]?(.+)', r'金额[:：]?(.+?)元'],
-        "违约责任": [r'违约.{0,20}责任.{0,200}', r'赔偿.{0,100}', r'罚款.{0,100}'],
-        "保密条款": [r'保密.{0,200}', r'机密信息.{0,200}'],
-        "终止条款": [r'终止.{0,200}', r'解除.{0,200}', r'到期.{0,100}'],
-        "适用法律": [r'适用.{0,10}法律[:：]?(.+)', r'管辖.{0,10}法律[:：]?(.+)'],
-        "争议解决": [r'争议.{0,10}解决.{0,200}', r'仲裁.{0,200}', r'诉讼.{0,200}']
+    # 步骤2: 关键要素提取（规则引擎）
+    # 当事人识别
+    parties = re.findall(r'(?:甲方|乙方|丙方|发包方|承包方|买方|卖方|出租方|承租方|委托方|受托方)[（(]([^）)]+)[）)]', contract_text)
+    if not parties:
+        parties = re.findall(r'(?:甲方|乙方|丙方)[：:]\s*([^\n，,。.]+)', contract_text)
+
+    # 金额识别
+    amounts = re.findall(r'(?:人民币|金额|总价|合同总价|价款)[：:\s]*([\d,，.]+)\s*元', contract_text)
+    amount_numbers = []
+    for amt in amounts:
+        cleaned = amt.replace(',', '').replace('，', '')
+        try:
+            amount_numbers.append(float(cleaned))
+        except ValueError:
+            pass
+
+    # 期限识别
+    duration_patterns = [
+        r'合同期限[：:\s]*自(\d{4}年\d{1,2}月\d{1,2}日).*(?:至|到)(\d{4}年\d{1,2}月\d{1,2}日)',
+        r'有效期为?(\d+)\s*(?:年|个月|月|日|天)',
+    ]
+    durations = []
+    for pattern in duration_patterns:
+        durations.extend(re.findall(pattern, contract_text))
+
+    # 违约责任识别
+    breach_keywords = ["违约", "违约金", "违约责任", "赔偿", "损失赔偿"]
+    breach_clauses = []
+    sentences = re.split(r'[。\n；;]', contract_text)
+    for sent in sentences:
+        if any(kw in sent for kw in breach_keywords) and len(sent.strip()) > 5:
+            breach_clauses.append(sent.strip())
+
+    # 争议解决识别
+    dispute_keywords = ["仲裁", "诉讼", "管辖", "争议解决", "法院"]
+    dispute_clauses = []
+    for sent in sentences:
+        if any(kw in sent for kw in dispute_keywords) and len(sent.strip()) > 5:
+            dispute_clauses.append(sent.strip())
+
+    # 步骤3: 完整性评估（条件判断树）
+    required_elements = {
+        "当事人": len(parties) > 0,
+        "合同金额": len(amount_numbers) > 0,
+        "合同期限": len(durations) > 0,
+        "违约责任": len(breach_clauses) > 0,
+        "争议解决": len(dispute_clauses) > 0,
+        "合同条款": len(articles) > 0,
+    }
+    completeness_score = sum(required_elements.values()) / len(required_elements) * 100
+
+    # 步骤4: 风险点识别
+    risk_points = []
+    if not required_elements["违约责任"]:
+        risk_points.append({"level": "高", "issue": "缺少违约责任条款"})
+    if not required_elements["争议解决"]:
+        risk_points.append({"level": "中", "issue": "缺少争议解决条款"})
+    if not required_elements["合同期限"]:
+        risk_points.append({"level": "中", "issue": "缺少明确的合同期限"})
+    if amount_numbers and max(amount_numbers) > 1000000:
+        risk_points.append({"level": "低", "issue": f"合同金额较大({max(amount_numbers):.0f}元)，建议法律审核"})
+
+    # 自动检测模糊表述
+    vague_terms = ["视情况", "另行协商", "适当", "合理", "尽快", "及时"]
+    for term in vague_terms:
+        if term in contract_text:
+            risk_points.append({"level": "低", "issue": f"存在模糊表述：'{term}'"})
+
+    return {
+        "structure": {
+            "chapters": chapters,
+            "articles_count": len(articles),
+            "articles": articles[:10],
+            "attachments": attachments,
+            "total_length": len(contract_text)
+        },
+        "key_elements": {
+            "parties": parties,
+            "amounts": amount_numbers,
+            "total_amount": sum(amount_numbers) if amount_numbers else None,
+            "durations": durations,
+            "breach_clauses": breach_clauses[:5],
+            "dispute_clauses": dispute_clauses[:3]
+        },
+        "completeness": {
+            "score": round(completeness_score, 1),
+            "required_elements": required_elements,
+            "missing_elements": [k for k, v in required_elements.items() if not v]
+        },
+        "risk_points": risk_points,
+        "risk_level": "高" if any(r["level"] == "高" for r in risk_points) else ("中" if risk_points else "低")
     }
 
-    # 风险关键词
-    risk_keywords = ["自动续约", "无限期", "无限制", "单方面", "不可撤销", "无条件",
-                     "全部责任", "无限赔偿", "放弃权利", "不得异议"]
 
-    results = {
-        "contract_length": len(contract_text),
-        "check_items": [],
-        "risk_points": [],
-        "missing_items": [],
-        "suggestions": []
+# ---------------------------------------------------------------------------
+# 2. 法规检索引擎 (倒排索引 + TF-IDF)
+# ---------------------------------------------------------------------------
+def regulation_search_engine(query, regulation_database, top_k=10):
+    """
+    法规检索引擎：倒排索引 + TF-IDF评分 + 法规层级权重。
+
+    算法原理:
+        - 倒排索引: term -> [(doc_id, freq), ...]，支持快速检索
+        - TF-IDF评分: tf(t,d) * idf(t) = (词频/文档长度) * log(N/df)
+        - 短语匹配: 查询中连续词组匹配加权
+        - 法规层级权重: 宪法>法律>行政法规>部门规章>地方性法规
+
+    参数:
+        query (str): 查询字符串
+        regulation_database (list[dict]): 法规数据库，每条含id, title, content, level
+        top_k (int): 返回前K条结果
+
+    返回:
+        list[dict]: 按相关度排序的法规列表，含score、matched_terms、snippet。
+    """
+    # 法规层级权重
+    level_weights = {
+        "宪法": 5.0, "法律": 4.0, "行政法规": 3.0,
+        "部门规章": 2.0, "地方性法规": 1.5, "司法解释": 3.5, "其他": 1.0
     }
 
-    for item in check_items:
-        patterns = clause_patterns.get(item, [])
-        found = False
-        for pattern in patterns:
-            matches = re.findall(pattern, contract_text, re.IGNORECASE)
-            if matches:
-                results["check_items"].append({
-                    "item": item,
-                    "status": "已找到",
-                    "content_preview": matches[0][:100] if matches else ""
-                })
-                found = True
-                break
-        if not found:
-            results["missing_items"].append(item)
-            results["check_items"].append({
-                "item": item,
-                "status": "未找到",
-                "content_preview": ""
-            })
+    # 步骤1: 分词（简易中文分词 - 按字+词组）
+    def tokenize(text):
+        # 提取2-4字词组和单字
+        tokens = re.findall(r'[\u4e00-\u9fa5]{2,4}|[a-zA-Z]+|\d+', text.lower())
+        return tokens
 
-    # 检查风险关键词
-    for keyword in risk_keywords:
-        if keyword in contract_text:
-            results["risk_points"].append({
-                "keyword": keyword,
-                "severity": "高" if keyword in ["无限期", "不可撤销", "全部责任", "无限赔偿"] else "中",
-                "suggestion": f"注意合同中包含「{keyword}」相关表述，建议仔细审查相关条款。"
-            })
+    query_tokens = tokenize(query)
+    query_set = set(query_tokens)
 
-    # 生成建议
-    if results["missing_items"]:
-        results["suggestions"].append(f"合同缺少以下重要条款：{', '.join(results['missing_items'])}，建议补充。")
-    if results["risk_points"]:
-        results["suggestions"].append(f"发现{len(results['risk_points'])}个风险点，建议法律顾问审查。")
-    if not results["risk_points"] and not results["missing_items"]:
-        results["suggestions"].append("合同条款基本完备，无明显风险关键词。")
+    # 步骤2: 构建倒排索引
+    inverted_index = defaultdict(list)  # term -> [(doc_idx, tf)]
+    doc_lengths = []
+    doc_term_sets = []
 
-    results["risk_count"] = len(results["risk_points"])
-    results["overall_status"] = "高风险" if results["risk_count"] > 3 else ("中风险" if results["risk_count"] > 0 else "低风险")
+    for doc_idx, reg in enumerate(regulation_database):
+        full_text = reg.get("title", "") + " " + reg.get("content", "")
+        tokens = tokenize(full_text)
+        doc_lengths.append(len(tokens))
+        term_counts = Counter(tokens)
+        doc_term_sets.append(set(tokens))
+        for term, count in term_counts.items():
+            inverted_index[term].append((doc_idx, count))
+
+    # 步骤3: 计算IDF
+    N = len(regulation_database)
+    idf = {}
+    for term in query_set:
+        df = len(inverted_index.get(term, []))
+        if df > 0:
+            idf[term] = math.log((N + 1) / (df + 1)) + 1  # 平滑IDF
+        else:
+            idf[term] = 0
+
+    # 步骤4: TF-IDF评分
+    scores = defaultdict(float)
+    matched_terms_map = defaultdict(list)
+
+    for term in query_tokens:
+        postings = inverted_index.get(term, [])
+        idf_val = idf.get(term, 0)
+        for doc_idx, tf in postings:
+            # TF归一化: tf / doc_length
+            tf_normalized = tf / max(doc_lengths[doc_idx], 1)
+            # 法规层级权重
+            reg = regulation_database[doc_idx]
+            level = reg.get("level", "其他")
+            level_weight = level_weights.get(level, 1.0)
+
+            score = tf_normalized * idf_val * level_weight
+            scores[doc_idx] += score
+            matched_terms_map[doc_idx].append(term)
+
+    # 步骤5: 短语匹配加分
+    if len(query_tokens) > 1:
+        query_phrase = "".join(query_tokens)
+        for doc_idx, reg in enumerate(regulation_database):
+            full_text = reg.get("title", "") + reg.get("content", "")
+            if query_phrase in full_text:
+                scores[doc_idx] *= 1.5  # 短语匹配50%加分
+
+    # 步骤6: 排序并生成结果
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+    results = []
+    for doc_idx, score in ranked:
+        reg = regulation_database[doc_idx]
+        content = reg.get("content", "")
+        # 生成摘要片段
+        snippet = content[:150] + "..." if len(content) > 150 else content
+        # 匹配词高亮
+        for term in matched_terms_map[doc_idx]:
+            snippet = snippet.replace(term, f"【{term}】")
+
+        results.append({
+            "doc_id": reg.get("id"),
+            "title": reg.get("title"),
+            "level": reg.get("level", "其他"),
+            "score": round(score, 4),
+            "matched_terms": list(set(matched_terms_map[doc_idx])),
+            "match_count": len(set(matched_terms_map[doc_idx])),
+            "snippet": snippet
+        })
 
     return results
 
 
 # ---------------------------------------------------------------------------
-# 2. 法规检索
+# 3. 风险评估模型
 # ---------------------------------------------------------------------------
-def regulation_searcher(keyword, industry="通用", jurisdiction="中国"):
+def risk_assessment_model(factors, weights, thresholds):
     """
-    法规检索：根据关键词、行业和司法管辖区检索相关法规。
+    风险评估模型：多因子风险评分 + 非线性变换 + 5级分类。
+
+    算法原理:
+        - 加权求和: R = Σ(wi * fi)，fi为因子值，wi为权重
+        - 非线性变换: 对每个因子应用sigmoid变换 f'(x) = 1/(1+exp(-k*(x-x0)))
+          将原始值映射到0-1区间，放大临界区域敏感度
+        - 5级分类: 低/中低/中/中高/高，基于阈值划分
+        - 风险矩阵: 二维风险矩阵(可能性 x 影响)
 
     参数:
-        keyword (str): 检索关键词。
-        industry (str): 行业领域，默认"通用"。
-        jurisdiction (str): 司法管辖区，默认"中国"。
+        factors (dict): 风险因子键值对 {factor_name: value}
+        weights (dict): 因子权重 {factor_name: weight}
+        thresholds (dict): 风险等级阈值 {level: (min, max)}
 
     返回:
-        dict: 检索结果，含匹配法规列表。
+        dict: 风险评估结果，含total_score、risk_level、risk_matrix、recommendations。
     """
-    # 法规知识库（示例数据）
-    regulation_db = {
-        "中国": {
-            "通用": [
-                {"name": "中华人民共和国民法典", "code": "民法典", "effective_date": "2021-01-01",
-                 "keywords": ["合同", "侵权", "物权", "人格权", "婚姻", "继承"]},
-                {"name": "中华人民共和国公司法", "code": "公司法", "effective_date": "2024-07-01",
-                 "keywords": ["公司", "股东", "董事", "监事", "注册资本"]},
-                {"name": "中华人民共和国劳动法", "code": "劳动法", "effective_date": "1995-01-01",
-                 "keywords": ["劳动", "工资", "社保", "工伤", "辞退"]}
-            ],
-            "金融": [
-                {"name": "中华人民共和国商业银行法", "code": "商业银行法", "effective_date": "2015-10-01",
-                 "keywords": ["银行", "存款", "贷款", "金融"]},
-                {"name": "中华人民共和国证券法", "code": "证券法", "effective_date": "2020-03-01",
-                 "keywords": ["证券", "股票", "债券", "上市", "信息披露"]}
-            ],
-            "互联网": [
-                {"name": "中华人民共和国网络安全法", "code": "网络安全法", "effective_date": "2017-06-01",
-                 "keywords": ["网络安全", "数据", "个人信息", "网络运营"]},
-                {"name": "中华人民共和国数据安全法", "code": "数据安全法", "effective_date": "2021-09-01",
-                 "keywords": ["数据", "数据安全", "数据处理", "数据分类"]}
-            ],
-            "医疗": [
-                {"name": "中华人民共和国基本医疗卫生与健康促进法", "code": "医疗卫生法", "effective_date": "2020-06-01",
-                 "keywords": ["医疗", "卫生", "健康", "药品"]},
-                {"name": "中华人民共和国药品管理法", "code": "药品管理法", "effective_date": "2019-12-01",
-                 "keywords": ["药品", "药品管理", "药品注册", "药品生产"]}
-            ]
+    # 步骤1: 非线性变换（sigmoid）
+    transformed_factors = {}
+    for name, value in factors.items():
+        # 假设值域0-10，中值5，灵敏度k=0.5
+        k = 0.5
+        x0 = 5.0
+        transformed = 1 / (1 + math.exp(-k * (value - x0)))
+        # 缩放回0-10
+        transformed_factors[name] = transformed * 10
+
+    # 步骤2: 加权求和
+    total_weight = sum(weights.values())
+    if total_weight == 0:
+        total_weight = 1
+    weighted_score = sum(transformed_factors.get(name, 0) * weights.get(name, 0) for name in factors) / total_weight * 10
+
+    # 步骤3: 风险等级分类
+    risk_levels = [
+        ("低", (0, 2)),
+        ("中低", (2, 4)),
+        ("中", (4, 6)),
+        ("中高", (6, 8)),
+        ("高", (8, 10))
+    ]
+    risk_level = "中"
+    for level, (lo, hi) in risk_levels:
+        if lo <= weighted_score < hi:
+            risk_level = level
+            break
+    if weighted_score >= 10:
+        risk_level = "高"
+
+    # 步骤4: 风险矩阵（可能性 x 影响）
+    # 将因子分为可能性因子和影响因子
+    likelihood_factors = {k: v for k, v in transformed_factors.items() if "频率" in k or "概率" in k or "可能性" in k}
+    impact_factors = {k: v for k, v in transformed_factors.items() if k not in likelihood_factors}
+
+    likelihood = sum(likelihood_factors.values()) / max(len(likelihood_factors), 1) if likelihood_factors else weighted_score / 2
+    impact = sum(impact_factors.values()) / max(len(impact_factors), 1) if impact_factors else weighted_score / 2
+
+    # 矩阵位置 (1-5 x 1-5)
+    matrix_likelihood = min(5, max(1, int(likelihood / 2) + 1))
+    matrix_impact = min(5, max(1, int(impact / 2) + 1))
+    matrix_score = matrix_likelihood * matrix_impact
+
+    # 步骤5: 处置建议
+    recommendations = []
+    if risk_level in ("高", "中高"):
+        recommendations.append("立即启动风险缓解措施，指定责任人")
+        recommendations.append("定期（每周）复查风险因子变化")
+    if risk_level in ("中",):
+        recommendations.append("制定风险监控计划，每月评估")
+    if risk_level in ("低", "中低"):
+        recommendations.append("保持常规监控，季度复核")
+
+    # 高风险因子识别
+    high_risk_factors = []
+    for name, value in transformed_factors.items():
+        if value >= 7:
+            high_risk_factors.append({"factor": name, "value": round(value, 2), "weight": weights.get(name, 0)})
+
+    return {
+        "total_score": round(weighted_score, 2),
+        "risk_level": risk_level,
+        "risk_matrix": {
+            "likelihood": round(likelihood, 2),
+            "impact": round(impact, 2),
+            "matrix_position": f"{matrix_likelihood}x{matrix_impact}",
+            "matrix_score": matrix_score
         },
-        "美国": {
-            "通用": [
-                {"name": "Uniform Commercial Code (UCC)", "code": "UCC", "effective_date": "1952-01-01",
-                 "keywords": ["commercial", "contract", "sale", "negotiable"]}
-            ]
-        }
+        "factors_detail": {
+            name: {
+                "raw_value": factors[name],
+                "transformed": round(transformed_factors[name], 2),
+                "weight": weights.get(name, 0),
+                "contribution": round(transformed_factors[name] * weights.get(name, 0) / total_weight * 10, 2)
+            } for name in factors
+        },
+        "high_risk_factors": high_risk_factors,
+        "recommendations": recommendations
     }
 
-    jurisdiction_laws = regulation_db.get(jurisdiction, {})
-    industry_laws = jurisdiction_laws.get(industry, jurisdiction_laws.get("通用", []))
 
-    matched = []
-    for law in industry_laws:
-        relevance = 0
-        if keyword in law["name"]:
-            relevance += 50
-        for kw in law.get("keywords", []):
-            if keyword in kw or kw in keyword:
-                relevance += 20
-        if relevance > 0:
-            matched.append({
-                **law,
-                "relevance_score": relevance,
-                "match_type": "名称匹配" if keyword in law["name"] else "关键词匹配"
+# ---------------------------------------------------------------------------
+# 4. 合规清单生成器
+# ---------------------------------------------------------------------------
+def compliance_checklist_generator(industry, regulations, company_profile):
+    """
+    合规清单生成器：基于行业+法规+公司特征生成结构化合规检查清单。
+
+    算法原理:
+        - 行业匹配: 根据行业类型匹配适用法规
+        - 规模筛选: 根据公司规模(人数/营收)调整检查项
+        - 检查项生成: 从法规条目提取检查要求，分配检查频次/责任人/风险等级
+        - 优先级排序: 按风险等级和法规层级排序
+
+    参数:
+        industry (str): 行业类型
+        regulations (list[dict]): 法规列表，含name, level, requirements
+        company_profile (dict): 公司特征 {size, revenue, has_personal_data, ...}
+
+    返回:
+        dict: 合规检查清单，含checklist、summary、priority_distribution。
+    """
+    # 检查频次模板
+    frequency_map = {
+        "高": "每月", "中高": "每季度", "中": "每半年", "低": "每年"
+    }
+
+    # 步骤1: 筛选适用法规
+    applicable_regs = []
+    for reg in regulations:
+        applicable = True
+        # 行业过滤
+        reg_industries = reg.get("industries", [])
+        if reg_industries and industry not in reg_industries:
+            applicable = False
+        # 规模过滤
+        min_size = reg.get("min_company_size", 0)
+        if company_profile.get("size", 0) < min_size:
+            applicable = False
+        if applicable:
+            applicable_regs.append(reg)
+
+    # 步骤2: 生成检查项
+    checklist = []
+    for reg in applicable_regs:
+        reg_name = reg.get("name", "")
+        reg_level = reg.get("level", "其他")
+        requirements = reg.get("requirements", [])
+
+        for req in requirements:
+            # 风险等级评估
+            risk_keywords = {"禁止": "高", "必须": "高", "应当": "中高", "不得": "高", "可以": "低"}
+            risk_level = "中"
+            for keyword, level in risk_keywords.items():
+                if keyword in req:
+                    risk_level = level
+                    break
+
+            # 检查频次
+            frequency = frequency_map.get(risk_level, "每半年")
+
+            # 责任人分配
+            if "数据" in req or "隐私" in req:
+                responsible = "数据保护官"
+            elif "财务" in req or "税务" in req:
+                responsible = "财务负责人"
+            elif "安全" in req:
+                responsible = "安全负责人"
+            elif "人事" in req or "劳动" in req:
+                responsible = "HR负责人"
+            else:
+                responsible = "合规专员"
+
+            checklist.append({
+                "id": f"CHK-{len(checklist)+1:03d}",
+                "regulation": reg_name,
+                "regulation_level": reg_level,
+                "requirement": req,
+                "risk_level": risk_level,
+                "frequency": frequency,
+                "responsible": responsible,
+                "status": "待检查",
+                "industry": industry
             })
 
-    matched.sort(key=lambda x: x["relevance_score"], reverse=True)
+    # 步骤3: 优先级排序
+    risk_order = {"高": 0, "中高": 1, "中": 2, "中低": 3, "低": 4}
+    checklist.sort(key=lambda x: risk_order.get(x["risk_level"], 5))
 
-    return {
-        "keyword": keyword,
-        "industry": industry,
-        "jurisdiction": jurisdiction,
-        "total_found": len(matched),
-        "results": matched,
-        "suggestion": "建议查阅完整法规文本以确认具体条款。" if matched else "未找到匹配法规，请调整关键词。"
-    }
-
-
-# ---------------------------------------------------------------------------
-# 3. 风险评估
-# ---------------------------------------------------------------------------
-def risk_assessor(business_info, risk_factors):
-    """
-    风险评估：根据业务信息和风险因素评估整体风险等级。
-
-    参数:
-        business_info (dict): 业务信息，含 company_name、industry、size、region 等。
-        risk_factors (list[dict]): 风险因素列表，每项含 factor、likelihood(1-5)、impact(1-5)。
-
-    返回:
-        dict: 风险评估报告，含总体风险等级和各风险详情。
-    """
-    risk_levels = {1: "极低", 2: "低", 3: "中", 4: "高", 5: "极高"}
-    assessed_risks = []
-
-    total_score = 0
-    for rf in risk_factors:
-        likelihood = rf.get("likelihood", 3)
-        impact = rf.get("impact", 3)
-        score = likelihood * impact  # 1-25
-        total_score += score
-
-        level = "低" if score <= 5 else ("中" if score <= 12 else ("高" if score <= 20 else "极高"))
-
-        assessed_risks.append({
-            "factor": rf.get("factor", "未知风险"),
-            "likelihood": likelihood,
-            "likelihood_label": risk_levels.get(likelihood, "中"),
-            "impact": impact,
-            "impact_label": risk_levels.get(impact, "中"),
-            "risk_score": score,
-            "risk_level": level,
-            "recommendation": _get_risk_recommendation(level, rf.get("factor", ""))
-        })
-
-    avg_score = total_score / len(risk_factors) if risk_factors else 0
-    overall_level = "低" if avg_score <= 5 else ("中" if avg_score <= 12 else ("高" if avg_score <= 20 else "极高"))
-
-    return {
-        "company": business_info.get("company_name", "未知企业"),
-        "industry": business_info.get("industry", "未知"),
-        "total_risks": len(risk_factors),
-        "overall_risk_score": round(avg_score, 1),
-        "overall_risk_level": overall_level,
-        "risk_breakdown": {
-            "低": len([r for r in assessed_risks if r["risk_level"] == "低"]),
-            "中": len([r for r in assessed_risks if r["risk_level"] == "中"]),
-            "高": len([r for r in assessed_risks if r["risk_level"] == "高"]),
-            "极高": len([r for r in assessed_risks if r["risk_level"] == "极高"])
-        },
-        "assessed_risks": sorted(assessed_risks, key=lambda x: x["risk_score"], reverse=True),
-        "priority_actions": [r["recommendation"] for r in assessed_risks if r["risk_level"] in ("高", "极高")]
-    }
-
-
-def _get_risk_recommendation(level, factor):
-    """根据风险等级和因素生成建议。"""
-    recommendations = {
-        "低": f"「{factor}」风险较低，建议常规监控。",
-        "中": f"「{factor}」风险中等，建议制定缓解措施并定期评估。",
-        "高": f"「{factor}」风险较高，建议立即采取控制措施并加强监控。",
-        "极高": f"「{factor}」风险极高，建议优先处理并制定应急预案。"
-    }
-    return recommendations.get(level, "建议进一步评估。")
-
-
-# ---------------------------------------------------------------------------
-# 4. 合规检查清单
-# ---------------------------------------------------------------------------
-def compliance_checklist(industry, checklist_type="general"):
-    """
-    合规检查清单：根据行业和清单类型生成合规检查项。
-
-    参数:
-        industry (str): 行业类型，如 "金融"、"互联网"、"医疗"、"制造"。
-        checklist_type (str): 清单类型，如 "general"（通用）、"data_privacy"（数据隐私）、
-            "financial"（财务合规），默认 "general"。
-
-    返回:
-        dict: 合规检查清单，含检查项列表。
-    """
-    checklist_db = {
-        "金融": {
-            "general": [
-                "持有有效的金融业务许可证",
-                "建立了反洗钱(AML)内部控制制度",
-                "客户身份识别(KYC)程序完整",
-                "定期进行合规审计",
-                "设立合规管理部门",
-                "员工合规培训完成率达标",
-                "大额交易报告机制健全",
-                "风险管理制度已落实"
-            ],
-            "financial": [
-                "财务报表按期编制并审计",
-                "资本充足率符合监管要求",
-                "关联交易披露完整",
-                "内控报告已提交",
-                "呆账准备金计提合规",
-                "信息披露符合要求"
-            ],
-            "data_privacy": [
-                "客户数据分类分级制度建立",
-                "数据加密传输和存储",
-                "数据访问权限控制到位",
-                "客户隐私政策已公示",
-                "数据泄露应急预案就绪",
-                "数据保留期限符合规定"
-            ]
-        },
-        "互联网": {
-            "general": [
-                "ICP备案完成",
-                "网络安全等级保护测评通过",
-                "用户协议和隐私政策已公示",
-                "内容审核机制建立",
-                "未成年人保护措施到位",
-                "数据安全管理制度建立"
-            ],
-            "data_privacy": [
-                "个人信息收集最小化原则落实",
-                "用户同意机制完善",
-                "个人信息影响评估已完成",
-                "数据出境安全评估完成",
-                "个人信息保护负责人已指定",
-                "数据主体权利保障机制建立"
-            ]
-        },
-        "医疗": {
-            "general": [
-                "医疗机构执业许可证有效",
-                "医护人员资质证书齐全",
-                "药品采购渠道合规",
-                "医疗废物处理符合规范",
-                "病历管理制度健全",
-                "医疗质量控制体系建立"
-            ],
-            "data_privacy": [
-                "患者隐私保护制度建立",
-                "病历数据加密存储",
-                "医疗数据访问权限控制",
-                "患者知情同意书签署",
-                "医疗数据共享合规审查",
-                "健康数据跨境传输评估"
-            ]
-        }
-    }
-
-    industry_checklists = checklist_db.get(industry, {})
-    items = industry_checklists.get(checklist_type, industry_checklists.get("general", [
-        "营业执照有效",
-        "税务登记完成",
-        "社保缴纳合规",
-        "劳动用工合规",
-        "安全生产制度建立",
-        "环境保护措施到位"
-    ]))
-
-    checklist = []
-    for i, item in enumerate(items):
-        checklist.append({
-            "id": i + 1,
-            "item": item,
-            "status": "待检查",
-            "priority": "高" if i < len(items) // 3 else ("中" if i < len(items) * 2 // 3 else "低"),
-            "category": checklist_type
-        })
+    # 步骤4: 统计
+    priority_dist = defaultdict(int)
+    for item in checklist:
+        priority_dist[item["risk_level"]] += 1
 
     return {
         "industry": industry,
-        "checklist_type": checklist_type,
-        "total_items": len(checklist),
-        "items": checklist,
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")
-    }
-
-
-# ---------------------------------------------------------------------------
-# 5. 数据隐私审计
-# ---------------------------------------------------------------------------
-def data_privacy_auditor(data_flow, processing_activities):
-    """
-    数据隐私审计：审计数据流向和处理活动的合规性。
-
-    参数:
-        data_flow (list[dict]): 数据流列表，每项含 source、destination、data_type、purpose。
-        processing_activities (list[dict]): 处理活动列表，每项含 activity、legal_basis、
-            data_category、retention_period。
-
-    返回:
-        dict: 审计报告，含合规状态和问题清单。
-    """
-    valid_legal_bases = ["同意", "合同履行", "法定义务", "合法权益", "公共利益", "重大利益"]
-
-    audit_result = {
-        "total_data_flows": len(data_flow),
-        "total_activities": len(processing_activities),
-        "compliant_flows": 0,
-        "non_compliant_flows": 0,
-        "compliant_activities": 0,
-        "non_compliant_activities": 0,
-        "issues": [],
-        "recommendations": [],
-        "data_flow_audit": [],
-        "activity_audit": []
-    }
-
-    # 审计数据流
-    for i, flow in enumerate(data_flow):
-        issues = []
-        if not flow.get("purpose"):
-            issues.append("缺少数据处理目的说明")
-        if not flow.get("data_type"):
-            issues.append("未标明数据类型")
-        if flow.get("destination") and "境外" in str(flow.get("destination", "")):
-            issues.append("数据涉及跨境传输，需进行安全评估")
-
-        status = "合规" if not issues else "不合规"
-        if status == "合规":
-            audit_result["compliant_flows"] += 1
-        else:
-            audit_result["non_compliant_flows"] += 1
-
-        audit_result["data_flow_audit"].append({
-            "flow_id": i + 1,
-            "source": flow.get("source", "未知"),
-            "destination": flow.get("destination", "未知"),
-            "data_type": flow.get("data_type", "未标明"),
-            "purpose": flow.get("purpose", "未说明"),
-            "status": status,
-            "issues": issues
-        })
-        audit_result["issues"].extend([f"数据流{i + 1}: {iss}" for iss in issues])
-
-    # 审计处理活动
-    for i, activity in enumerate(processing_activities):
-        issues = []
-        legal_basis = activity.get("legal_basis", "")
-        if legal_basis not in valid_legal_bases:
-            issues.append(f"法律依据「{legal_basis}」不在有效范围内")
-        if not activity.get("retention_period"):
-            issues.append("未设定数据保留期限")
-
-        status = "合规" if not issues else "不合规"
-        if status == "合规":
-            audit_result["compliant_activities"] += 1
-        else:
-            audit_result["non_compliant_activities"] += 1
-
-        audit_result["activity_audit"].append({
-            "activity_id": i + 1,
-            "activity": activity.get("activity", "未知"),
-            "legal_basis": legal_basis,
-            "data_category": activity.get("data_category", "未标明"),
-            "retention_period": activity.get("retention_period", "未设定"),
-            "status": status,
-            "issues": issues
-        })
-        audit_result["issues"].extend([f"处理活动{i + 1}: {iss}" for iss in issues])
-
-    # 生成建议
-    if audit_result["non_compliant_flows"] > 0:
-        audit_result["recommendations"].append("存在不合规数据流，建议补充目的说明和数据类型标注。")
-    if audit_result["non_compliant_activities"] > 0:
-        audit_result["recommendations"].append("部分处理活动法律依据不明确，建议补充合法依据。")
-    if not audit_result["issues"]:
-        audit_result["recommendations"].append("数据隐私合规状态良好，建议保持定期审计。")
-
-    audit_result["overall_compliance"] = "合格" if audit_result["non_compliant_flows"] == 0 and audit_result["non_compliant_activities"] == 0 else "不合格"
-
-    return audit_result
-
-
-# ---------------------------------------------------------------------------
-# 6. 敏感信息脱敏
-# ---------------------------------------------------------------------------
-def document_redactor(text, sensitive_patterns=None):
-    """
-    敏感信息脱敏：识别并脱敏文本中的敏感信息。
-
-    参数:
-        text (str): 原始文本。
-        sensitive_patterns (dict): 自定义敏感模式，键为类型，值为正则表达式。
-            为None时使用默认模式。
-
-    返回:
-        dict: 脱敏结果，含脱敏后文本和替换统计。
-    """
-    if sensitive_patterns is None:
-        sensitive_patterns = {
-            "身份证号": r'\d{17}[\dXx]',
-            "手机号": r'1[3-9]\d{9}',
-            "银行卡号": r'\d{16,19}',
-            "邮箱": r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
-            "IP地址": r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}',
-            "微信号": r'[Ww]echat[:：]?\s*\w+'
+        "company_profile": company_profile,
+        "checklist": checklist,
+        "summary": {
+            "total_items": len(checklist),
+            "applicable_regulations": len(applicable_regs),
+            "priority_distribution": dict(priority_dist),
+            "high_risk_items": priority_dist.get("高", 0)
         }
+    }
 
-    redacted_text = text
-    stats = {}
 
-    for pattern_name, pattern in sensitive_patterns.items():
-        matches = re.findall(pattern, redacted_text)
-        count = len(matches)
-        if count > 0:
-            redacted_text = re.sub(pattern, f'【{pattern_name}已脱敏】', redacted_text)
-            stats[pattern_name] = {
-                "count": count,
-                "examples": matches[:3]  # 保留前3个示例
+# ---------------------------------------------------------------------------
+# 5. 隐私影响评估 (PIA)
+# ---------------------------------------------------------------------------
+def privacy_impact_assessment(data_processing_activities):
+    """
+    隐私影响评估(PIA)：分析数据处理活动并识别隐私风险。
+
+    算法原理:
+        - 风险识别: 4维度评估（数据最小化/目的限制/存储限制/安全性）
+        - 风险评分: 每维度0-10分，加权汇总
+        - 风险等级: 低/中/高/极高
+        - 缓解措施: 基于风险类型自动推荐
+
+    参数:
+        data_processing_activities (list[dict]): 数据处理活动列表，每条含
+            activity_name, data_types, purpose, retention_period, recipients, security_measures
+
+    返回:
+        dict: PIA评估结果，含risk_assessment、risk_level、mitigation_measures、recommendations。
+    """
+    # 敏感数据类型
+    sensitive_types = {"身份证号", "银行卡号", "健康信息", "生物特征", "种族", "宗教信仰", "政治观点", "性取向", "犯罪记录"}
+
+    all_risks = []
+    total_risk_score = 0
+
+    for activity in data_processing_activities:
+        data_types = set(activity.get("data_types", []))
+        purpose = activity.get("purpose", "")
+        retention = activity.get("retention_period", "")
+        recipients = activity.get("recipients", [])
+        security = activity.get("security_measures", [])
+
+        risks = []
+
+        # 维度1: 数据最小化评估
+        collected_types = len(data_types)
+        sensitive_count = len(data_types & sensitive_types)
+        if collected_types > 5:
+            risks.append({"dimension": "数据最小化", "risk": "收集数据类型过多", "score": 7, "level": "中高"})
+        if sensitive_count > 0:
+            risks.append({"dimension": "数据最小化", "risk": f"涉及{sensitive_count}类敏感数据", "score": 9, "level": "高"})
+
+        # 维度2: 目的限制评估
+        if not purpose or len(purpose) < 10:
+            risks.append({"dimension": "目的限制", "risk": "处理目的不明确", "score": 8, "level": "高"})
+        elif "其他" in purpose or "等" in purpose:
+            risks.append({"dimension": "目的限制", "risk": "处理目的过于宽泛", "score": 6, "level": "中高"})
+
+        # 维度3: 存储限制评估
+        if not retention:
+            risks.append({"dimension": "存储限制", "risk": "未明确数据保留期限", "score": 8, "level": "高"})
+        else:
+            # 解析保留期限
+            if "永久" in retention or "无限期" in retention:
+                risks.append({"dimension": "存储限制", "risk": "数据永久保留，无删除机制", "score": 9, "level": "高"})
+            elif "年" in retention:
+                years = re.findall(r'(\d+)\s*年', retention)
+                if years and int(years[0]) > 5:
+                    risks.append({"dimension": "存储限制", "risk": f"保留期限过长({years[0]}年)", "score": 6, "level": "中高"})
+
+        # 维度4: 安全性评估
+        security_count = len(security)
+        required_measures = ["加密", "访问控制", "审计日志", "备份"]
+        missing_measures = [m for m in required_measures if not any(m in s for s in security)]
+        if len(missing_measures) >= 2:
+            risks.append({"dimension": "安全性", "risk": f"缺少{len(missing_measures)}项安全措施", "score": 8, "level": "高"})
+        elif len(missing_measures) == 1:
+            risks.append({"dimension": "安全性", "risk": f"缺少安全措施: {missing_measures[0]}", "score": 5, "level": "中"})
+
+        # 维度5: 数据共享评估
+        if len(recipients) > 3:
+            risks.append({"dimension": "数据共享", "risk": f"数据共享方过多({len(recipients)}个)", "score": 6, "level": "中高"})
+        if any("境外" in r for r in recipients):
+            risks.append({"dimension": "数据共享", "risk": "涉及跨境数据传输", "score": 9, "level": "高"})
+
+        activity_score = max(r["score"] for r in risks) if risks else 2
+        total_risk_score = max(total_risk_score, activity_score)
+
+        all_risks.append({
+            "activity": activity.get("activity_name", ""),
+            "risks": risks,
+            "risk_score": activity_score
+        })
+
+    # 总体风险等级
+    if total_risk_score >= 8:
+        overall_level = "极高"
+    elif total_risk_score >= 6:
+        overall_level = "高"
+    elif total_risk_score >= 4:
+        overall_level = "中"
+    else:
+        overall_level = "低"
+
+    # 缓解措施推荐
+    mitigation_measures = []
+    for risk_activity in all_risks:
+        for risk in risk_activity["risks"]:
+            if risk["level"] in ("高",):
+                if "敏感数据" in risk["risk"]:
+                    mitigation_measures.append(f"对敏感数据进行加密脱敏处理（{risk_activity['activity']}）")
+                if "保留期限" in risk["risk"]:
+                    mitigation_measures.append(f"制定数据保留和删除策略（{risk_activity['activity']}）")
+                if "跨境" in risk["risk"]:
+                    mitigation_measures.append(f"完成跨境数据传输安全评估（{risk_activity['activity']}）")
+                if "安全措施" in risk["risk"]:
+                    mitigation_measures.append(f"补充缺失的安全控制措施（{risk_activity['activity']}）")
+
+    return {
+        "risk_assessment": all_risks,
+        "overall_risk_score": total_risk_score,
+        "risk_level": overall_level,
+        "mitigation_measures": list(set(mitigation_measures)),
+        "recommendations": [
+            "建议每半年进行一次PIA复查" if overall_level in ("低", "中") else "建议立即实施风险缓解措施并在3个月内复查",
+            "确保所有数据处理活动都有明确的法律依据",
+            "建立数据主体权利响应机制"
+        ],
+        "requires_dpa_notification": overall_level in ("极高", "高")
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6. 数据脱敏器 (K-匿名/L-多样性/T-接近性)
+# ---------------------------------------------------------------------------
+def data_anonymizer(data, methods, sensitive_fields):
+    """
+    数据脱敏器：支持K-匿名、L-多样性、T-接近性三种匿名化模型。
+
+    算法原理:
+        - K-匿名: 通过泛化(Generalization)和抑制(Suppression)使每条记录
+          至少与K-1条其他记录在准标识符上无法区分
+        - L-多样性: 在K-匿名基础上，每个等价类中敏感属性至少有L个不同值
+        - T-接近性: 每个等价类中敏感属性分布与全局分布的距离不超过T
+          (使用EMD Earth Mover's Distance度量)
+
+    参数:
+        data (list[dict]): 原始数据记录列表
+        methods (dict): 脱敏方法配置 {k: 5, l: 3, t: 0.2, generalize_fields: [...]}
+        sensitive_fields (list[str]): 敏感字段列表
+
+    返回:
+        dict: 脱敏结果，含anonymized_data、anonymization_report、privacy_metrics。
+    """
+    if not data:
+        return {"error": "No data to anonymize"}
+
+    k = methods.get("k", 5)
+    l = methods.get("l", 3)
+    t_threshold = methods.get("t", 0.2)
+    generalize_fields = methods.get("generalize_fields", [])
+
+    # 步骤1: 泛化处理（将精确值替换为区间/类别）
+    anonymized = []
+    for record in data:
+        new_record = record.copy()
+        for field in generalize_fields:
+            if field in new_record:
+                val = new_record[field]
+                # 年龄泛化为5岁区间
+                if field == "age" or field == "年龄":
+                    try:
+                        age = int(val)
+                        new_record[field] = f"{age // 5 * 5}-{age // 5 * 5 + 4}"
+                    except (ValueError, TypeError):
+                        pass
+                # 邮编泛化为前3位
+                elif field == "zipcode" or field == "邮编":
+                    sval = str(val)
+                    if len(sval) >= 3:
+                        new_record[field] = sval[:3] + "***"
+                # 其他字段泛化为前缀
+                else:
+                    sval = str(val)
+                    if len(sval) > 2:
+                        new_record[field] = sval[:2] + "*"
+        anonymized.append(new_record)
+
+    # 步骤2: 构建等价类（准标识符相同的记录分组）
+    quasi_identifiers = generalize_fields
+    equivalence_classes = defaultdict(list)
+    for record in anonymized:
+        key = tuple(str(record.get(qi, "")) for qi in quasi_identifiers)
+        equivalence_classes[key].append(record)
+
+    # 步骤3: K-匿名验证
+    k_violations = []
+    for key, group in equivalence_classes.items():
+        if len(group) < k:
+            k_violations.append({"quasi_identifier": key, "group_size": len(group)})
+
+    # 步骤4: 抑制处理（不满足K-匿名的记录，抑制准标识符）
+    suppressed_count = 0
+    for key, group in equivalence_classes.items():
+        if len(group) < k:
+            for record in group:
+                for qi in quasi_identifiers:
+                    record[qi] = "*"
+                suppressed_count += 1
+
+    # 步骤5: L-多样性验证
+    l_violations = []
+    for key, group in equivalence_classes.items():
+        for sf in sensitive_fields:
+            values = set(str(r.get(sf, "")) for r in group)
+            if len(values) < l:
+                l_violations.append({
+                    "quasi_identifier": key,
+                    "sensitive_field": sf,
+                    "distinct_values": len(values)
+                })
+
+    # 步骤6: T-接近性验证（使用EMD简化版）
+    # 全局敏感属性分布
+    global_dist = defaultdict(float)
+    total_records = len(anonymized)
+    for sf in sensitive_fields:
+        sf_values = [str(r.get(sf, "")) for r in anonymized]
+        value_counts = Counter(sf_values)
+        for val, count in value_counts.items():
+            global_dist[(sf, val)] = count / total_records
+
+    t_violations = []
+    for key, group in equivalence_classes.items():
+        for sf in sensitive_fields:
+            sf_values = [str(r.get(sf, "")) for r in group]
+            group_dist = Counter(sf_values)
+            group_size = len(group)
+
+            # 计算EMD简化版（分布距离）
+            all_values = set(list(global_dist.keys()) + [(sf, v) for v in sf_values])
+            emd = 0
+            for val_key in all_values:
+                if val_key[0] == sf:
+                    global_p = global_dist.get(val_key, 0)
+                    local_p = group_dist.get(val_key[1], 0) / group_size if group_size > 0 else 0
+                    emd += abs(global_p - local_p)
+            emd /= 2  # EMD = 总变差 / 2
+
+            if emd > t_threshold:
+                t_violations.append({
+                    "quasi_identifier": key,
+                    "sensitive_field": sf,
+                    "emd": round(emd, 4)
+                })
+
+    # 步骤7: 隐私度量
+    privacy_metrics = {
+        "k_anonymity": {
+            "k_value": k,
+            "satisfied": len(k_violations) == 0,
+            "violations": len(k_violations),
+            "suppressed_records": suppressed_count
+        },
+        "l_diversity": {
+            "l_value": l,
+            "satisfied": len(l_violations) == 0,
+            "violations": len(l_violations)
+        },
+        "t_closeness": {
+            "t_threshold": t_threshold,
+            "satisfied": len(t_violations) == 0,
+            "violations": len(t_violations)
+        },
+        "equivalence_classes": len(equivalence_classes),
+        "avg_class_size": round(total_records / max(len(equivalence_classes), 1), 1),
+        "information_loss": round(suppressed_count / max(total_records, 1) * 100, 1)
+    }
+
+    return {
+        "anonymized_data": anonymized,
+        "anonymization_report": {
+            "methods_applied": list(methods.keys()),
+            "generalized_fields": generalize_fields,
+            "suppressed_count": suppressed_count,
+            "total_records": total_records
+        },
+        "privacy_metrics": privacy_metrics,
+        "violations": {
+            "k_anonymity": k_violations[:5],
+            "l_diversity": l_violations[:5],
+            "t_closeness": t_violations[:5]
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. 法规术语解释器
+# ---------------------------------------------------------------------------
+def regulatory_term_explainer(term, context):
+    """
+    法规术语解释器：基于术语词典+上下文分析提供解释。
+
+    算法原理:
+        - 术语词典: 内置法律术语知识库
+        - 上下文消歧: 同一术语在不同上下文中有不同含义
+        - 相关法规引用: 关联适用的法律法规
+
+    参数:
+        term (str): 待解释的术语
+        context (str): 上下文文本
+
+    返回:
+        dict: 术语解释，含definition、applicable_scenarios、related_regulations、context_analysis。
+    """
+    # 术语知识库
+    term_database = {
+        "个人信息": {
+            "definition": "以电子或者其他方式记录的与已识别或者可识别的自然人有关的各种信息，不包括匿名化处理后的信息。",
+            "scenarios": ["数据处理", "隐私保护", "数据安全"],
+            "related_laws": ["个人信息保护法", "民法典", "网络安全法"],
+            "key_points": ["可识别性是核心特征", "匿名化处理后不再属于个人信息"]
+        },
+        "敏感个人信息": {
+            "definition": "一旦泄露或者非法使用，容易导致自然人的人格尊严受到侵害或者人身、财产安全受到危害的个人信息。",
+            "scenarios": ["数据分类分级", "特殊保护", "风险评估"],
+            "related_laws": ["个人信息保护法第28条", "数据安全法"],
+            "key_points": ["包括生物识别、宗教信仰、特定身份、医疗健康、金融账户、行踪轨迹等", "需取得单独同意"]
+        },
+        "数据出境": {
+            "definition": "将在中华人民共和国境内收集和产生的个人信息和重要数据，传输、存储到中华人民共和国境外。",
+            "scenarios": ["跨境数据传输", "国际业务", "数据本地化"],
+            "related_laws": ["个人信息保护法第38-40条", "数据出境安全评估办法", "网络安全法第37条"],
+            "key_points": ["需通过安全评估或认证", "关键信息基础设施运营者有特殊要求"]
+        },
+        "匿名化": {
+            "definition": "个人信息经过处理无法识别特定自然人且不能复原的过程。",
+            "scenarios": ["数据发布", "统计分析", "数据共享"],
+            "related_laws": ["个人信息保护法第73条"],
+            "key_points": ["不可逆性是关键", "匿名化后数据不再受个保法约束"]
+        },
+        "最小必要原则": {
+            "definition": "处理个人信息应当具有明确、合理的目的，并与处理目的直接相关，采取对个人权益影响最小的方式。",
+            "scenarios": ["数据收集", "产品设计", "合规审计"],
+            "related_laws": ["个人信息保护法第6条", "数据安全法"],
+            "key_points": ["目的明确", "方式最小影响", "收集范围最小化"]
+        },
+        "数据安全": {
+            "definition": "通过采取必要措施，确保数据处于有效保护和合法利用的状态，以及具备保障持续安全状态的能力。",
+            "scenarios": ["数据管理", "安全防护", "合规建设"],
+            "related_laws": ["数据安全法第3条", "网络安全法"],
+            "key_points": ["包括数据收集、存储、使用、加工、传输、提供、公开等全生命周期安全"]
+        },
+        "算法推荐": {
+            "definition": "利用生成合成类、个性化推送类、排序精选类、检索过滤类等算法技术向用户提供信息的服务。",
+            "scenarios": ["互联网信息服务", "个性化推荐", "信息过滤"],
+            "related_laws": ["互联网信息服务算法推荐管理规定", "电子商务法"],
+            "key_points": ["需提供关闭选项", "不得利用算法实施差别待遇"]
+        }
+    }
+
+    # 模糊匹配
+    matched_term = None
+    for db_term, info in term_database.items():
+        if term in db_term or db_term in term:
+            matched_term = db_term
+            break
+
+    if not matched_term:
+        # 基于上下文推断
+        if any(kw in context for kw in ["数据", "处理", "收集"]):
+            matched_term = "个人信息"
+        elif any(kw in context for kw in ["跨境", "境外", "传输"]):
+            matched_term = "数据出境"
+        else:
+            return {
+                "term": term,
+                "definition": f"术语'{term}'不在内置知识库中，建议查阅相关法律法规原文。",
+                "applicable_scenarios": [],
+                "related_regulations": [],
+                "context_analysis": f"上下文中未找到明确关联。",
+                "in_database": False
             }
 
-    return {
-        "original_length": len(text),
-        "redacted_length": len(redacted_text),
-        "redacted_text": redacted_text,
-        "redaction_stats": stats,
-        "total_redactions": sum(s["count"] for s in stats.values()),
-        "patterns_used": list(sensitive_patterns.keys())
-    }
+    term_info = term_database[matched_term]
 
+    # 上下文分析
+    context_analysis = []
+    for scenario in term_info["scenarios"]:
+        if scenario in context or any(kw in context for kw in scenario):
+            context_analysis.append(f"上下文中涉及'{scenario}'场景")
 
-# ---------------------------------------------------------------------------
-# 7. 法律术语解释
-# ---------------------------------------------------------------------------
-def legal_term_explainer(term, context=""):
-    """
-    法律术语解释：解释法律术语的含义。
-
-    参数:
-        term (str): 需要解释的法律术语。
-        context (str): 术语出现的上下文，帮助精确解释，默认空。
-
-    返回:
-        dict: 术语解释，含定义、相关概念和注意事项。
-    """
-    term_db = {
-        "违约责任": {
-            "definition": "当事人一方不履行合同义务或者履行合同义务不符合约定时，应当承担的民事责任。",
-            "legal_basis": "《民法典》第五百七十七条",
-            "types": ["继续履行", "采取补救措施", "赔偿损失", "支付违约金", "解除合同"],
-            "notes": "违约责任的承担不以过错为前提，但不可抗力可部分或全部免责。"
-        },
-        "不可抗力": {
-            "definition": "不能预见、不能避免且不能克服的客观情况，如自然灾害、战争等。",
-            "legal_basis": "《民法典》第一百八十条",
-            "types": ["自然灾害", "社会异常事件", "政府行为"],
-            "notes": "发生不可抗力时，应及时通知对方并采取措施减损，否则不能全部免责。"
-        },
-        "缔约过失责任": {
-            "definition": "在合同订立过程中，一方因违背诚信原则导致对方损失时应承担的赔偿责任。",
-            "legal_basis": "《民法典》第五百条",
-            "types": ["假借订立合同恶意磋商", "故意隐瞒重要事实", "提供虚假情况"],
-            "notes": "缔约过失责任发生在合同成立之前，区别于违约责任。"
-        },
-        "诉讼时效": {
-            "definition": "权利人请求人民法院保护其民事权利的法定期间。",
-            "legal_basis": "《民法典》第一百八十八条",
-            "types": ["一般诉讼时效（3年）", "短期诉讼时效", "最长诉讼时效（20年）"],
-            "notes": "诉讼时效届满后，实体权利不消灭，但义务人可提出抗辩拒绝履行。"
-        },
-        "连带责任": {
-            "definition": "两个或两个以上的债务人对同一债务负有全部清偿责任的制度。",
-            "legal_basis": "《民法典》第五百一十八条",
-            "types": ["法定连带责任", "约定连带责任"],
-            "notes": "债权人可向任一连带债务人请求全部给付，债务人内部可追偿。"
-        },
-        "知识产权": {
-            "definition": "权利人对其智力成果和经营活动中的标记、信誉依法享有的专有权利。",
-            "legal_basis": "《民法典》第一百二十三条",
-            "types": ["著作权", "专利权", "商标权", "商业秘密", "集成电路布图设计"],
-            "notes": "知识产权具有地域性、时间性和专有性特征。"
-        },
-        "个人信息": {
-            "definition": "以电子或者其他方式记录的与已识别或者可识别的自然人有关的各种信息。",
-            "legal_basis": "《个人信息保护法》第四条",
-            "types": ["一般个人信息", "敏感个人信息"],
-            "notes": "处理个人信息应遵循合法、正当、必要和诚信原则，取得个人同意。"
-        }
-    }
-
-    # 查找术语
-    explanation = term_db.get(term)
-    if not explanation:
-        # 模糊匹配
-        for key in term_db:
-            if term in key or key in term:
-                explanation = term_db[key]
-                explanation["matched_term"] = key
-                break
-
-    if not explanation:
-        return {
-            "term": term,
-            "found": False,
-            "message": f"未在数据库中找到「{term}」的解释，建议查阅法律条文或咨询专业律师。"
-        }
-
-    explanation["term"] = term
-    explanation["context"] = context
-    explanation["found"] = True
-
-    if context:
-        explanation["context_note"] = f"结合上下文「{context[:50]}」，该术语在此场景中应注意其具体适用条件。"
-
-    return explanation
-
-
-# ---------------------------------------------------------------------------
-# 8. 条款生成器
-# ---------------------------------------------------------------------------
-def clause_generator(contract_type, clause_type, parameters=None):
-    """
-    条款生成器：根据合同类型和条款类型生成标准条款文本。
-
-    参数:
-        contract_type (str): 合同类型，如 "买卖合同"、"租赁合同"、"服务合同"。
-        clause_type (str): 条款类型，如 "保密条款"、"违约条款"、"争议解决"。
-        parameters (dict): 条款参数，如 {party_a: "甲方", party_b: "乙方", amount: "10000"}。
-
-    返回:
-        dict: 生成的条款文本和说明。
-    """
-    if parameters is None:
-        parameters = {"party_a": "甲方", "party_b": "乙方"}
-
-    clause_templates = {
-        "保密条款": {
-            "content": """第X条 保密条款
-
-{party_a}与{party_b}（以下简称"双方"）在履行本合同过程中知悉的对方商业秘密、技术秘密及其他保密信息，未经对方书面同意，不得向任何第三方披露、使用或允许他人使用。
-
-保密义务在本合同终止后【{retention_years}】年内继续有效。违反本条约定的一方应赔偿对方因此遭受的全部损失，并支付违约金人民币{penalty_amount}元。""",
-            "variables": ["party_a", "party_b", "retention_years", "penalty_amount"]
-        },
-        "违约条款": {
-            "content": """第X条 违约责任
-
-任何一方违反本合同约定的，应承担违约责任。违约方应向守约方支付违约金人民币{penalty_amount}元，并赔偿守约方因此遭受的直接损失。
-
-如违约金不足以弥补守约方损失的，违约方应补足差额。守约方有权选择要求违约方继续履行合同或解除合同。""",
-            "variables": ["penalty_amount"]
-        },
-        "争议解决": {
-            "content": """第X条 争议解决
-
-因本合同引起的或与本合同有关的任何争议，双方应首先通过友好协商解决；协商不成的，任何一方均有权向{court_jurisdiction}人民法院提起诉讼。
-
-在争议解决期间，对争议部分以外的合同条款，双方仍应继续履行。""",
-            "variables": ["court_jurisdiction"]
-        },
-        "不可抗力": {
-            "content": """第X条 不可抗力
-
-因不可抗力导致一方不能履行或不能完全履行本合同义务的，应根据不可抗力的影响程度，部分或全部免除责任。
-
-遭遇不可抗力的一方应在事件发生后【{notice_days}】日内书面通知对方，并提供相关证明文件。双方应协商采取补救措施，减少不可抗力造成的损失。""",
-            "variables": ["notice_days"]
-        },
-        "终止条款": {
-            "content": """第X条 合同终止
-
-出现下列情形之一的，本合同终止：
-（一）双方协商一致解除；
-（二）一方严重违约，经催告后仍未改正的，守约方有权解除；
-（三）因不可抗力致使合同目的不能实现；
-（四）法律法规规定的其他情形。
-
-合同终止后，双方应按约定进行结算和交接。""",
-            "variables": []
-        }
-    }
-
-    template = clause_templates.get(clause_type)
-    if not template:
-        return {
-            "contract_type": contract_type,
-            "clause_type": clause_type,
-            "found": False,
-            "available_types": list(clause_templates.keys()),
-            "message": f"未找到「{clause_type}」的模板，请使用可用类型之一。"
-        }
-
-    # 填充参数
-    defaults = {
-        "retention_years": "3",
-        "penalty_amount": "10000",
-        "court_jurisdiction": "合同签订地",
-        "notice_days": "15",
-        "party_a": "甲方",
-        "party_b": "乙方"
-    }
-    # 合并参数和默认值
-    full_params = {**defaults, **parameters}
-
-    content = template["content"]
-    for var in template["variables"]:
-        placeholder = "{" + var + "}"
-        content = content.replace(placeholder, str(full_params.get(var, defaults.get(var, ""))))
+    for law in term_info["related_laws"]:
+        if law.split("第")[0] in context:
+            context_analysis.append(f"上下文中引用了相关法规：{law}")
 
     return {
-        "contract_type": contract_type,
+        "term": matched_term,
+        "query_term": term,
+        "definition": term_info["definition"],
+        "applicable_scenarios": term_info["scenarios"],
+        "related_regulations": term_info["related_laws"],
+        "key_points": term_info["key_points"],
+        "context_analysis": context_analysis if context_analysis else ["上下文中未检测到直接关联的场景"],
+        "in_database": True
+    }
+
+
+# ---------------------------------------------------------------------------
+# 8. 合规条款生成器
+# ---------------------------------------------------------------------------
+def clause_generator(clause_type, parameters, jurisdiction):
+    """
+    合规条款生成器：基于模板引擎+参数填充生成合同条款。
+
+    算法原理:
+        - 模板引擎: 条件渲染 + 参数插值
+        - 法律条款库: 按条款类型和管辖区域组织模板
+        - 参数验证: 必填参数检查 + 类型验证
+
+    参数:
+        clause_type (str): 条款类型 "confidentiality"/"breach"/"force_majeure"/"ip"/"dispute"
+        parameters (dict): 条款参数
+        jurisdiction (str): 管辖区 "CN"/"US"/"EU"
+
+    返回:
+        dict: 生成的条款，含clause_text、legal_basis、notes。
+    """
+    # 条款模板库
+    templates = {
+        "confidentiality": {
+            "template": """第X条 保密条款
+
+1. 保密信息定义
+双方确认，在本合同履行过程中，{disclosing_party}向{receiving_party}披露的以下信息属于保密信息：
+(1) 技术信息：包括但不限于{tech_info}；
+(2) 商业信息：包括但不限于{business_info}；
+(3) 其他标记为"保密"的信息。
+
+2. 保密义务
+{receiving_party}承诺：
+(1) 对保密信息予以严格保密，不得向{authorized_personnel_limit}以外的第三方披露；
+(2) 仅将保密信息用于本合同约定的目的；
+(3) 采取不低于保护其自身保密信息的标准的安全措施。
+
+3. 保密期限
+本条保密义务在合同终止后{retention_years}年内持续有效。
+
+4. 违约责任
+如{receiving_party}违反本条保密义务，应向{disclosing_party}支付违约金人民币{penalty_amount}元，
+并赔偿因此造成的全部损失。""",
+            "required_params": ["disclosing_party", "receiving_party", "retention_years", "penalty_amount"],
+            "optional_params": ["tech_info", "business_info", "authorized_personnel_limit"],
+            "legal_basis": ["合同法第43条", "反不正当竞争法第9条"]
+        },
+        "breach": {
+            "template": """第X条 违约责任
+
+1. 一般违约
+任何一方违反本合同约定的义务，应承担违约责任，并赔偿对方因此遭受的损失。
+
+2. 违约金
+如{breaching_party}未按约履行义务，应向{non_breaching_party}支付违约金，
+金额为合同总价的{penalty_percentage}%，即人民币{penalty_amount}元。
+
+3. 继续履行
+支付违约金并不免除{breaching_party}继续履行合同的义务。
+
+4. 解除权
+如一方严重违约导致合同目的无法实现，{non_breaching_party}有权解除合同，
+并要求违约方赔偿全部损失。""",
+            "required_params": ["breaching_party", "non_breaching_party", "penalty_percentage", "penalty_amount"],
+            "optional_params": [],
+            "legal_basis": ["民法典第577条", "民法典第585条"]
+        },
+        "force_majeure": {
+            "template": """第X条 不可抗力
+
+1. 定义
+不可抗力是指不能预见、不能避免且不能克服的客观情况，包括但不限于：
+自然灾害（地震、洪水、台风等）、战争、武装冲突、罢工、政府行为、{additional_events}。
+
+2. 通知义务
+如一方因不可抗力无法履行合同义务，应在不可抗力发生后{notice_days}日内书面通知对方，
+并提供相关证明文件。
+
+3. 豁免
+因不可抗力导致合同无法履行的，遭受不可抗力的一方部分或全部免除责任，
+但应在不可抗力消除后{resume_days}日内恢复履行。
+
+4. 合同变更或解除
+如不可抗力持续超过{termination_days}日，双方可协商变更或解除合同。""",
+            "required_params": ["notice_days", "resume_days", "termination_days"],
+            "optional_params": ["additional_events"],
+            "legal_basis": ["民法典第590条"]
+        },
+        "ip": {
+            "template": """第X条 知识产权
+
+1. 原有知识产权
+双方各自在合同签订前已拥有的知识产权，其所有权不因本合同的签订和履行而转移。
+
+2. 新生知识产权
+在合同履行过程中产生的{ip_type}，其知识产权归属如下：
+(1) {party_a}独立完成的，归{party_a}所有；
+(2) 双方合作完成的，由双方共有，各占{ownership_split}。
+
+3. 授权
+{ip_owner}授予{ip_user}在{license_scope}范围内使用相关知识产权的非独占、不可转让的许可。
+
+4. 侵权处理
+如因使用本合同项下的知识产权侵犯第三方权益，由{infringement_responsible}承担全部责任。""",
+            "required_params": ["ip_type", "party_a", "ownership_split", "ip_owner", "ip_user", "license_scope", "infringement_responsible"],
+            "optional_params": [],
+            "legal_basis": ["民法典第123条", "专利法", "著作权法"]
+        },
+        "dispute": {
+            "template": """第X条 争议解决
+
+1. 协商
+因本合同引起的或与本合同有关的任何争议，双方应首先通过友好协商解决。
+
+2. 调解
+协商不成的，双方可向{mediation_org}申请调解。
+
+3. {dispute_method}
+如调解不成，双方同意按以下方式解决：
+(1) 向{court_name}提起诉讼；或
+(2) 将争议提交{arbitration_org}，按照其届时有效的仲裁规则在{arbitration_place}进行仲裁。
+仲裁裁决为终局裁决，对双方均有约束力。
+
+4. 适用法律
+本合同的订立、效力、解释、履行和争议解决均适用{applicable_law}。""",
+            "required_params": ["dispute_method", "applicable_law"],
+            "optional_params": ["mediation_org", "court_name", "arbitration_org", "arbitration_place"],
+            "legal_basis": ["民事诉讼法", "仲裁法"]
+        }
+    }
+
+    # 管辖区适配
+    jurisdiction_config = {
+        "CN": {"applicable_law": "中华人民共和国法律", "arbitration_default": "中国国际经济贸易仲裁委员会"},
+        "US": {"applicable_law": "适用美国相关州法律", "arbitration_default": "美国仲裁协会(AAA)"},
+        "EU": {"applicable_law": "适用欧盟相关法规", "arbitration_default": "国际商会仲裁院(ICC)"}
+    }
+    jur_config = jurisdiction_config.get(jurisdiction, jurisdiction_config["CN"])
+
+    if clause_type not in templates:
+        return {"error": f"Unsupported clause type: {clause_type}", "supported_types": list(templates.keys())}
+
+    template_info = templates[clause_type]
+    template = template_info["template"]
+    required = template_info["required_params"]
+    optional = template_info.get("optional_params", [])
+
+    # 参数验证
+    missing_params = [p for p in required if p not in parameters or not parameters[p]]
+    if missing_params:
+        return {
+            "error": "Missing required parameters",
+            "missing_params": missing_params,
+            "required_params": required
+        }
+
+    # 参数填充
+    fill_params = {}
+    for p in required + optional:
+        if p in parameters and parameters[p]:
+            fill_params[p] = str(parameters[p])
+        else:
+            # 默认值
+            defaults = {
+                "tech_info": "源代码、技术文档、设计图纸",
+                "business_info": "客户信息、定价策略、商业计划",
+                "authorized_personnel_limit": "需要知情的员工",
+                "additional_events": "传染病疫情",
+                "mediation_org": "当地商事调解中心",
+                "court_name": "合同签订地有管辖权的人民法院",
+                "arbitration_org": jur_config["arbitration_default"],
+                "arbitration_place": "北京",
+                "applicable_law": jur_config["applicable_law"],
+                "dispute_method": "仲裁"
+            }
+            fill_params[p] = defaults.get(p, "【待填写】")
+
+    # 渲染模板
+    clause_text = template
+    for key, value in fill_params.items():
+        clause_text = clause_text.replace("{" + key + "}", value)
+
+    return {
         "clause_type": clause_type,
-        "found": True,
-        "clause_content": content,
-        "variables_used": template["variables"],
-        "parameters_applied": {v: full_params.get(v) for v in template["variables"]},
-        "note": f"生成的条款适用于{contract_type}，请根据实际情况调整具体参数。"
+        "jurisdiction": jurisdiction,
+        "clause_text": clause_text,
+        "legal_basis": template_info["legal_basis"],
+        "notes": [
+            "本条款由系统自动生成，建议经法律专业人士审核后使用",
+            f"管辖区适用规则: {jur_config['applicable_law']}",
+            f"必填参数: {', '.join(required)}"
+        ],
+        "parameters_used": fill_params
     }
 
 
 # ---------------------------------------------------------------------------
-# 9. 义务追踪器
+# 9. 合规义务追踪器
 # ---------------------------------------------------------------------------
-def obligation_tracker(obligations, deadlines):
+def obligation_tracker(obligations, deadline, status):
     """
-    义务追踪器：追踪合同或法规义务的履行状态和截止日期。
+    合规义务追踪器：管理合规义务并自动计算紧急程度。
+
+    算法原理:
+        - 紧急度计算: 基于剩余天数/逾期天数的指数衰减模型
+          urgency = exp(-days_remaining / tau)，tau=30天时间常数
+        - 优先级排序: 紧急度 * 风险权重 * 状态权重
+        - SLA监控: 逾期自动升级优先级
 
     参数:
-        obligations (list[dict]): 义务列表，每项含 id、description、responsible_party、status。
-        deadlines (dict): 截止日期映射，键为义务id，值为日期字符串 "YYYY-MM-DD"。
+        obligations (list[dict]): 义务列表，每条含name, deadline, responsible, risk_level
+        deadline (str): 当前参考日期 "YYYY-MM-DD"
+        status (str): 状态过滤器 "all"/"overdue"/"upcoming"/"completed"
 
     返回:
-        dict: 义务追踪报告，含状态统计和即将到期项。
+        dict: 义务追踪结果，含tracked_obligations、summary、alerts。
     """
-    today = datetime.now()
+    current_date = datetime.strptime(deadline, "%Y-%m-%d")
+
+    # 风险权重
+    risk_weights = {"高": 3.0, "中高": 2.0, "中": 1.5, "低": 1.0}
+    # 状态权重
+    status_weights = {"未开始": 1.0, "进行中": 0.8, "已完成": 0.1, "已逾期": 1.5}
+
     tracked = []
-    overdue = []
-    upcoming = []
-    completed = []
-
     for obligation in obligations:
-        obl_id = obligation.get("id")
-        description = obligation.get("description", "")
-        responsible = obligation.get("responsible_party", "未指定")
-        status = obligation.get("status", "pending")
+        obl_deadline_str = obligation.get("deadline", deadline)
+        obl_deadline = datetime.strptime(obl_deadline_str, "%Y-%m-%d")
+        days_remaining = (obl_deadline - current_date).days
 
-        deadline_str = deadlines.get(obl_id, "")
-        if deadline_str:
-            deadline = datetime.strptime(deadline_str, "%Y-%m-%d")
-            days_remaining = (deadline - today).days
+        # 计算紧急度（指数衰减模型）
+        tau = 30  # 时间常数
+        if days_remaining < 0:
+            urgency = 1.0  # 已逾期，最大紧急度
+            days_status = f"逾期{abs(days_remaining)}天"
+            obl_status = "已逾期"
+        elif days_remaining == 0:
+            urgency = 1.0
+            days_status = "今日到期"
+            obl_status = obligation.get("status", "进行中")
         else:
-            deadline = None
-            days_remaining = None
+            urgency = math.exp(-days_remaining / tau)
+            days_status = f"剩余{days_remaining}天"
+            obl_status = obligation.get("status", "未开始")
 
-        item = {
-            "id": obl_id,
-            "description": description,
-            "responsible_party": responsible,
-            "status": status,
-            "deadline": deadline_str,
+        # 优先级 = 紧急度 * 风险权重 * 状态权重
+        risk_weight = risk_weights.get(obligation.get("risk_level", "中"), 1.5)
+        status_weight = status_weights.get(obl_status, 1.0)
+        priority_score = urgency * risk_weight * status_weight
+
+        # 优先级等级
+        if priority_score >= 2.0:
+            priority = "P0-紧急"
+        elif priority_score >= 1.0:
+            priority = "P1-高"
+        elif priority_score >= 0.5:
+            priority = "P2-中"
+        else:
+            priority = "P3-低"
+
+        tracked.append({
+            "name": obligation.get("name", ""),
+            "deadline": obl_deadline_str,
+            "responsible": obligation.get("responsible", "未指定"),
+            "risk_level": obligation.get("risk_level", "中"),
+            "status": obl_status,
             "days_remaining": days_remaining,
-            "priority": "紧急" if (days_remaining is not None and days_remaining <= 7 and status != "completed") else "常规"
-        }
+            "days_status": days_status,
+            "urgency_score": round(urgency, 4),
+            "priority_score": round(priority_score, 4),
+            "priority": priority,
+            "is_overdue": days_remaining < 0
+        })
 
-        if status == "completed":
-            item["urgency"] = "已完成"
-            completed.append(item)
-        elif days_remaining is not None:
-            if days_remaining < 0:
-                item["urgency"] = "已逾期"
-                overdue.append(item)
-            elif days_remaining <= 7:
-                item["urgency"] = "即将到期"
-                upcoming.append(item)
-            else:
-                item["urgency"] = "正常"
-        else:
-            item["urgency"] = "未设定期限"
+    # 状态过滤
+    if status == "overdue":
+        tracked = [t for t in tracked if t["is_overdue"]]
+    elif status == "upcoming":
+        tracked = [t for t in tracked if not t["is_overdue"] and t["status"] != "已完成"]
+    elif status == "completed":
+        tracked = [t for t in tracked if t["status"] == "已完成"]
 
-        tracked.append(item)
+    # 优先级排序
+    tracked.sort(key=lambda x: -x["priority_score"])
+
+    # 统计
+    overdue_count = sum(1 for t in tracked if t["is_overdue"])
+    upcoming_7days = sum(1 for t in tracked if 0 <= t["days_remaining"] <= 7)
+    completed_count = sum(1 for t in tracked if t["status"] == "已完成")
+
+    # 告警
+    alerts = []
+    for t in tracked:
+        if t["is_overdue"]:
+            alerts.append({"type": "逾期", "message": f"'{t['name']}'已逾期{abs(t['days_remaining'])}天", "priority": t["priority"]})
+        elif t["days_remaining"] <= 3 and t["status"] != "已完成":
+            alerts.append({"type": "即将到期", "message": f"'{t['name']}'将在{t['days_remaining']}天内到期", "priority": t["priority"]})
 
     return {
-        "total_obligations": len(obligations),
-        "status_summary": {
-            "completed": len(completed),
-            "overdue": len(overdue),
-            "upcoming": len(upcoming),
-            "pending": len(obligations) - len(completed) - len(overdue) - len(upcoming)
+        "current_date": deadline,
+        "tracked_obligations": tracked,
+        "summary": {
+            "total": len(tracked),
+            "overdue": overdue_count,
+            "upcoming_7days": upcoming_7days,
+            "completed": completed_count,
+            "completion_rate": round(completed_count / max(len(tracked), 1) * 100, 1)
         },
-        "overdue_items": overdue,
-        "upcoming_items": upcoming,
-        "completed_items": completed,
-        "all_tracked": sorted(tracked, key=lambda x: (x.get("days_remaining") or 9999)),
-        "generated_at": today.strftime("%Y-%m-%d %H:%M"),
-        "action_required": len(overdue) > 0 or len(upcoming) > 0
+        "alerts": alerts[:10]
     }
 
 
 # ---------------------------------------------------------------------------
-# 10. 合规报告生成
+# 10. 合规报告生成器
 # ---------------------------------------------------------------------------
-def compliance_report_generator(audit_data, output_format="text"):
+def compliance_report_generator(audit_results, format='markdown'):
     """
-    合规报告生成：将审计数据整理为结构化报告。
+    合规报告生成器：汇总审计结果生成结构化合规报告。
+
+    算法原理:
+        - 数据聚合: 按类型/严重度/状态分组统计
+        - 风险评分: 加权汇总各审计项风险分
+        - 报告模板: 执行摘要 -> 合规状态 -> 违规详情 -> 整改建议 -> 风险评估
+        - 格式化: Markdown/HTML双格式输出
 
     参数:
-        audit_data (dict): 审计数据，含 report_title、auditor、date、findings、
-            recommendations、overall_status 等。
-        output_format (str): 输出格式，可选 "text"（纯文本）、"json"（JSON格式）、
-            "markdown"（Markdown格式），默认 "text"。
+        audit_results (list[dict]): 审计结果列表，每条含category, severity, status, description, recommendation
+        format (str): 输出格式 "markdown"/"html"
 
     返回:
-        str: 格式化的合规报告。
+        dict: 报告生成结果，含report_text、summary、statistics。
     """
-    report_title = audit_data.get("report_title", "合规审计报告")
-    auditor = audit_data.get("auditor", "未知")
-    audit_date = audit_data.get("date", datetime.now().strftime("%Y-%m-%d"))
-    findings = audit_data.get("findings", [])
-    recommendations = audit_data.get("recommendations", [])
-    overall_status = audit_data.get("overall_status", "待评估")
-    scope = audit_data.get("scope", "全量审计")
+    # 步骤1: 数据聚合
+    total = len(audit_results)
+    by_category = defaultdict(list)
+    by_severity = defaultdict(int)
+    by_status = defaultdict(int)
 
-    # 统计发现项
-    critical = [f for f in findings if f.get("severity") == "critical"]
-    high = [f for f in findings if f.get("severity") == "high"]
-    medium = [f for f in findings if f.get("severity") == "medium"]
-    low = [f for f in findings if f.get("severity") == "low"]
+    severity_weights = {"严重": 10, "高": 7, "中": 4, "低": 1}
+    total_risk_score = 0
 
-    stats = {
-        "total_findings": len(findings),
-        "critical": len(critical),
-        "high": len(high),
-        "medium": len(medium),
-        "low": len(low),
-        "recommendations_count": len(recommendations)
-    }
+    for result in audit_results:
+        cat = result.get("category", "其他")
+        sev = result.get("severity", "低")
+        stat = result.get("status", "待处理")
 
-    if output_format == "json":
-        report = {
-            "report_title": report_title,
-            "auditor": auditor,
-            "audit_date": audit_date,
-            "scope": scope,
+        by_category[cat].append(result)
+        by_severity[sev] += 1
+        by_status[stat] += 1
+        total_risk_score += severity_weights.get(sev, 1)
+
+    # 步骤2: 整体合规状态评估
+    compliance_rate = by_status.get("合规", 0) / max(total, 1) * 100
+    non_compliant = by_status.get("不合规", 0) + by_status.get("违规", 0)
+
+    if compliance_rate >= 90:
+        overall_status = "优秀"
+    elif compliance_rate >= 75:
+        overall_status = "良好"
+    elif compliance_rate >= 60:
+        overall_status = "需改进"
+    else:
+        overall_status = "不合格"
+
+    avg_risk = total_risk_score / max(total, 1)
+    if avg_risk >= 7:
+        risk_level = "高"
+    elif avg_risk >= 4:
+        risk_level = "中"
+    else:
+        risk_level = "低"
+
+    # 步骤3: 生成报告内容
+    report_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if format == 'markdown':
+        lines = [
+            f"# 合规审计报告",
+            f"",
+            f"**报告日期**: {report_date}",
+            f"**审计项总数**: {total}",
+            f"**整体合规状态**: {overall_status}",
+            f"**合规率**: {compliance_rate:.1f}%",
+            f"**风险等级**: {risk_level}",
+            f"",
+            f"---",
+            f"",
+            f"## 1. 执行摘要",
+            f"",
+            f"本次合规审计共检查 **{total}** 个审计项，其中：",
+            f"- 合规: {by_status.get('合规', 0)} 项",
+            f"- 待整改: {by_status.get('待处理', 0)} 项",
+            f"- 不合规: {non_compliant} 项",
+            f"- 风险总分: {total_risk_score} (平均: {avg_risk:.1f})",
+            f"",
+            f"## 2. 合规状态分布",
+            f"",
+            f"| 状态 | 数量 | 占比 |",
+            f"|------|------|------|",
+        ]
+        for stat, count in sorted(by_status.items(), key=lambda x: -x[1]):
+            lines.append(f"| {stat} | {count} | {count/max(total,1)*100:.1f}% |")
+
+        lines.extend([
+            f"",
+            f"## 3. 风险严重度分布",
+            f"",
+            f"| 严重度 | 数量 | 风险分 |",
+            f"|--------|------|--------|",
+        ])
+        for sev in ["严重", "高", "中", "低"]:
+            count = by_severity.get(sev, 0)
+            lines.append(f"| {sev} | {count} | {count * severity_weights.get(sev, 1)} |")
+
+        lines.extend([f"", f"## 4. 违规详情", f""])
+        for cat, items in by_category.items():
+            issues = [i for i in items if i.get("status") in ("不合规", "违规", "待处理")]
+            if issues:
+                lines.append(f"### {cat}")
+                for issue in issues:
+                    lines.append(f"- **[{issue.get('severity', '中')}]** {issue.get('description', '')}")
+                    if issue.get("recommendation"):
+                        lines.append(f"  - 整改建议: {issue['recommendation']}")
+                lines.append("")
+
+        lines.extend([
+            f"## 5. 整改建议",
+            f"",
+        ])
+        recommendations_set = set()
+        for result in audit_results:
+            if result.get("recommendation"):
+                recommendations_set.add(result["recommendation"])
+        for i, rec in enumerate(recommendations_set, 1):
+            lines.append(f"{i}. {rec}")
+
+        lines.extend([
+            f"",
+            f"## 6. 风险评估",
+            f"",
+            f"- **总体风险等级**: {risk_level}",
+            f"- **平均风险分**: {avg_risk:.1f}",
+            f"- **高风险项**: {by_severity.get('严重', 0) + by_severity.get('高', 0)} 个",
+            f"- **建议优先处理**: {'是' if non_compliant > 0 else '否'}",
+            f"",
+            f"---",
+            f"*本报告由合规审计系统自动生成*",
+        ])
+
+        report_text = "\n".join(lines)
+
+    elif format == 'html':
+        html_parts = [
+            "<html><head><meta charset='utf-8'><style>",
+            "body{font-family:sans-serif;margin:20px} table{border-collapse:collapse;width:100%}",
+            "th,td{border:1px solid #ddd;padding:8px;text-align:left} th{background:#f2f2f2}",
+            "</style></head><body>",
+            f"<h1>合规审计报告</h1>",
+            f"<p><strong>报告日期</strong>: {report_date} | <strong>合规状态</strong>: {overall_status} | <strong>合规率</strong>: {compliance_rate:.1f}%</p>",
+            f"<h2>状态分布</h2><table><tr><th>状态</th><th>数量</th><th>占比</th></tr>",
+        ]
+        for stat, count in sorted(by_status.items(), key=lambda x: -x[1]):
+            html_parts.append(f"<tr><td>{stat}</td><td>{count}</td><td>{count/max(total,1)*100:.1f}%</td></tr>")
+        html_parts.append("</table>")
+
+        html_parts.append("<h2>违规详情</h2>")
+        for cat, items in by_category.items():
+            issues = [i for i in items if i.get("status") in ("不合规", "违规", "待处理")]
+            if issues:
+                html_parts.append(f"<h3>{cat}</h3><ul>")
+                for issue in issues:
+                    html_parts.append(f"<li><strong>[{issue.get('severity','中')}]</strong> {issue.get('description','')}")
+                    if issue.get("recommendation"):
+                        html_parts.append(f"<br><em>建议: {issue['recommendation']}</em>")
+                    html_parts.append("</li>")
+                html_parts.append("</ul>")
+
+        html_parts.append(f"<h2>风险评估</h2><p>总体风险等级: <strong>{risk_level}</strong> | 平均风险分: {avg_risk:.1f}</p>")
+        html_parts.append("</body></html>")
+        report_text = "\n".join(html_parts)
+    else:
+        report_text = json.dumps({
+            "summary": {"total": total, "compliance_rate": compliance_rate, "status": overall_status},
+            "by_status": dict(by_status), "by_severity": dict(by_severity),
+            "risk_level": risk_level, "avg_risk": avg_risk
+        }, ensure_ascii=False, indent=2)
+
+    return {
+        "format": format,
+        "report_text": report_text,
+        "summary": {
+            "total_items": total,
+            "compliance_rate": round(compliance_rate, 1),
             "overall_status": overall_status,
-            "statistics": stats,
-            "findings": findings,
-            "recommendations": recommendations
+            "risk_level": risk_level,
+            "total_risk_score": total_risk_score,
+            "avg_risk_score": round(avg_risk, 2),
+            "by_status": dict(by_status),
+            "by_severity": dict(by_severity),
+            "by_category": {k: len(v) for k, v in by_category.items()}
         }
-        return json.dumps(report, ensure_ascii=False, indent=2)
-
-    elif output_format == "markdown":
-        lines = [
-            f"# {report_title}",
-            "",
-            f"**审计人员**: {auditor}  ",
-            f"**审计日期**: {audit_date}  ",
-            f"**审计范围**: {scope}  ",
-            f"**总体状态**: {overall_status}",
-            "",
-            "## 统计概要",
-            "",
-            f"| 严重程度 | 数量 |",
-            f"|----------|------|",
-            f"| 严重 | {stats['critical']} |",
-            f"| 高 | {stats['high']} |",
-            f"| 中 | {stats['medium']} |",
-            f"| 低 | {stats['low']} |",
-            f"| **合计** | **{stats['total_findings']}** |",
-            ""
-        ]
-
-        if findings:
-            lines.append("## 审计发现")
-            lines.append("")
-            for i, f in enumerate(findings, 1):
-                lines.append(f"### 发现 {i}")
-                lines.append(f"- **描述**: {f.get('description', '')}")
-                lines.append(f"- **严重程度**: {f.get('severity', '未知')}")
-                lines.append(f"- **状态**: {f.get('status', '未处理')}")
-                if f.get('recommendation'):
-                    lines.append(f"- **建议**: {f.get('recommendation')}")
-                lines.append("")
-
-        if recommendations:
-            lines.append("## 改进建议")
-            lines.append("")
-            for i, rec in enumerate(recommendations, 1):
-                lines.append(f"{i}. {rec}")
-            lines.append("")
-
-        lines.append("---")
-        lines.append(f"*报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
-
-        return "\n".join(lines)
-
-    else:  # text format
-        lines = [
-            "=" * 60,
-            f"  {report_title}",
-            "=" * 60,
-            "",
-            f"  审计人员: {auditor}",
-            f"  审计日期: {audit_date}",
-            f"  审计范围: {scope}",
-            f"  总体状态: {overall_status}",
-            "",
-            "-" * 60,
-            "  统计概要",
-            "-" * 60,
-            f"  严重问题: {stats['critical']}",
-            f"  高级问题: {stats['high']}",
-            f"  中级问题: {stats['medium']}",
-            f"  低级问题: {stats['low']}",
-            f"  问题总数: {stats['total_findings']}",
-            f"  建议数量: {stats['recommendations_count']}",
-            "",
-        ]
-
-        if findings:
-            lines.append("-" * 60)
-            lines.append("  审计发现")
-            lines.append("-" * 60)
-            for i, f in enumerate(findings, 1):
-                lines.append(f"  [{i}] {f.get('description', '')}")
-                lines.append(f"      严重程度: {f.get('severity', '未知')}")
-                lines.append(f"      状态: {f.get('status', '未处理')}")
-                if f.get('recommendation'):
-                    lines.append(f"      建议: {f.get('recommendation')}")
-                lines.append("")
-
-        if recommendations:
-            lines.append("-" * 60)
-            lines.append("  改进建议")
-            lines.append("-" * 60)
-            for i, rec in enumerate(recommendations, 1):
-                lines.append(f"  {i}. {rec}")
-            lines.append("")
-
-        lines.append("=" * 60)
-        lines.append(f"  报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append("=" * 60)
-
-        return "\n".join(lines)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -923,23 +1367,67 @@ def compliance_report_generator(audit_data, output_format="text"):
 if __name__ == "__main__":
     print("=" * 60)
     print("行业合规工具 - compliance-checker")
+    print("高级算法版本 (倒排索引/TF-IDF/K-匿名/PIA)")
     print("=" * 60)
 
-    # 演示：合同分析
-    print("\n[1] 合同条款分析示例:")
-    sample_contract = "本合同金额为50000元，付款方式为银行转账。如一方违约，需赔偿对方全部损失。本合同适用中国法律。"
-    result = contract_analyzer(sample_contract)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    # 测试1: 合同分析
+    print("\n[1] 合同智能分析:")
+    contract = """甲方（上海XX科技有限公司）与乙方（北京YY服务公司）签订本服务合同。
+    第一条 合同期限：自2025年1月1日至2025年12月31日，有效期为1年。
+    第二条 合同金额：人民币 500,000 元。
+    第三条 违约责任：如一方违约，应支付违约金人民币50,000元。
+    第四条 争议解决：双方如有争议，应提交上海仲裁委员会仲裁。"""
+    analysis = contract_analyzer(contract)
+    print(f"  完整性评分: {analysis['completeness']['score']}%")
+    print(f"  风险等级: {analysis['risk_level']}")
+    print(f"  风险点: {len(analysis['risk_points'])}个")
 
-    # 演示：法规检索
-    print("\n[2] 法规检索示例:")
-    regs = regulation_searcher("数据", "互联网", "中国")
-    print(json.dumps(regs, ensure_ascii=False, indent=2))
+    # 测试2: 法规检索
+    print("\n[2] 法规检索引擎:")
+    reg_db = [
+        {"id": "R001", "title": "个人信息保护法", "content": "个人信息处理者应当遵循最小必要原则收集个人信息", "level": "法律"},
+        {"id": "R002", "title": "数据安全法", "content": "国家建立数据安全风险评估和应急处置机制", "level": "法律"},
+        {"id": "R003", "title": "网络安全审查办法", "content": "网络安全审查重点评估数据出境安全风险", "level": "部门规章"},
+    ]
+    search_results = regulation_search_engine("个人信息安全", reg_db, top_k=3)
+    for r in search_results:
+        print(f"  [{r['score']}] {r['title']} ({r['level']}) - 匹配: {r['matched_terms']}")
 
-    # 演示：法律术语
-    print("\n[3] 法律术语解释示例:")
-    term = legal_term_explainer("不可抗力", "合同履行")
-    print(json.dumps(term, ensure_ascii=False, indent=2))
+    # 测试3: 风险评估
+    print("\n[3] 风险评估模型:")
+    risk = risk_assessment_model(
+        factors={"数据泄露频率": 7, "安全措施完善度": 3, "合规历史记录": 5, "第三方风险": 6},
+        weights={"数据泄露频率": 0.3, "安全措施完善度": 0.3, "合规历史记录": 0.2, "第三方风险": 0.2},
+        thresholds={}
+    )
+    print(f"  总风险分: {risk['total_score']}, 等级: {risk['risk_level']}")
+    print(f"  风险矩阵: 可能性={risk['risk_matrix']['likelihood']}, 影响={risk['risk_matrix']['impact']}")
+
+    # 测试4: 隐私影响评估
+    print("\n[4] 隐私影响评估(PIA):")
+    activities = [
+        {"activity_name": "用户注册", "data_types": ["姓名", "手机号", "身份证号"], "purpose": "身份验证",
+         "retention_period": "5年", "recipients": ["云服务商"], "security_measures": ["加密", "访问控制"]},
+        {"activity_name": "行为分析", "data_types": ["浏览记录", "位置信息"], "purpose": "个性化推荐和广告投放",
+         "retention_period": "永久", "recipients": ["广告平台", "数据分析公司", "第三方SDK"], "security_measures": ["加密"]}
+    ]
+    pia = privacy_impact_assessment(activities)
+    print(f"  总体风险: {pia['overall_risk_score']}/10, 等级: {pia['risk_level']}")
+    print(f"  缓解措施: {len(pia['mitigation_measures'])}条")
+
+    # 测试5: 数据脱敏
+    print("\n[5] 数据脱敏器:")
+    test_data = [
+        {"name": "张三", "age": 25, "zipcode": "200001", "disease": "感冒"},
+        {"name": "李四", "age": 27, "zipcode": "200001", "disease": "感冒"},
+        {"name": "王五", "age": 25, "zipcode": "200002", "disease": "流感"},
+        {"name": "赵六", "age": 27, "zipcode": "200002", "disease": "流感"},
+        {"name": "钱七", "age": 25, "zipcode": "200001", "disease": "感冒"},
+    ]
+    anon = data_anonymizer(test_data, {"k": 2, "l": 2, "t": 0.3, "generalize_fields": ["age", "zipcode"]}, ["disease"])
+    print(f"  K-匿名满足: {anon['privacy_metrics']['k_anonymity']['satisfied']}")
+    print(f"  L-多样性满足: {anon['privacy_metrics']['l_diversity']['satisfied']}")
+    print(f"  信息损失: {anon['privacy_metrics']['information_loss']}%")
 
     print("\n" + "=" * 60)
     print("所有工具已就绪，可通过导入 main 模块使用。")
