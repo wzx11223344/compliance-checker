@@ -1,2 +1,5 @@
 # compliance-checker 无外部依赖
 # 仅使用Python标准库（re, json, datetime）
+
+pytest>=7.0
+flake8>=6.0

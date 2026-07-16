@@ -1,4 +1,6 @@
 # compliance-checker 行业合规工具
+[![CI](https://github.com/wzx11223344/compliance-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/wzx11223344/compliance-checker/actions/workflows/ci.yml)
+
 
 ## 概述
 
